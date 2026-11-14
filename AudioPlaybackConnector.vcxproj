@@ -335,6 +335,16 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="SettingsUtil.hpp" />
+    <ClInclude Include="SettingsWindow.hpp" />
+    <ClInclude Include="ConnectionController.hpp" />
+    <ClInclude Include="ReceiverLifecycle.hpp" />
+    <ClInclude Include="PhonePresence.hpp" />
+    <ClInclude Include="DiagnosticLog.hpp" />
+    <ClInclude Include="TransportReadiness.hpp" />
+    <ClInclude Include="AudioHealthPolicy.hpp" />
+    <ClInclude Include="AudioSurvey.hpp" />
+    <ClInclude Include="AudioSessionActivation.hpp" />
+    <ClInclude Include="AudioMonitor.hpp" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="Util.hpp" />
   </ItemGroup>
@@ -353,6 +363,7 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="AudioPlaybackConnector.rc" />
+    <ResourceCompile Include="Settings.rc" />
     <ResourceCompile Include="translate\generated\translate.rc" />
   </ItemGroup>
   <ItemGroup>

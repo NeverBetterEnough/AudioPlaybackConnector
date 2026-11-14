@@ -1,10 +1,13 @@
 #include "pch.h"
 #include "AudioPlaybackConnector.h"
+#include "ConnectionController.hpp"
+#include "PhonePresence.hpp"
+#include "AudioMonitor.hpp"
+#include "SettingsWindow.hpp"
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 void SetupFlyout();
 void SetupMenu();
-winrt::fire_and_forget ConnectDevice(DevicePicker, std::wstring_view);
 void SetupDevicePicker();
 void SetupSvgIcon();
 void UpdateNotifyIcon();
@@ -15,12 +18,26 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	_In_ int       nCmdShow)
 {
 	UNREFERENCED_PARAMETER(hPrevInstance);
-	UNREFERENCED_PARAMETER(lpCmdLine);
 	UNREFERENCED_PARAMETER(nCmdShow);
+	const std::wstring_view arguments(lpCmdLine);
 
+	wil::unique_handle instance(CreateMutexW(nullptr, FALSE, L"Local\\AudioPlaybackConnector"));
+	if (instance && GetLastError() == ERROR_ALREADY_EXISTS)
+	{
+		if (const auto existing = FindWindowW(L"AudioPlaybackConnector", nullptr))
+		{
+			const bool modeCommand = arguments == L"--pause-audio" || arguments == L"--resume-audio";
+			PostMessageW(existing, modeCommand ? WM_SET_AUDIO_ENABLED : (arguments == L"--repair-audio" ? WM_REPAIR_AUDIO : WM_SHOWSETTINGS),
+				modeCommand && arguments == L"--resume-audio", 0);
+		}
+		return EXIT_SUCCESS;
+	}
 	g_hInst = hInstance;
-
-	winrt::init_apartment();
+	InitializeDiagnosticLog();
+	DiagnosticLog(L"application starting; diagnostics v6; persistent receiver, arrival watcher, one-time A2DP session activation");
+	g_repairOnStartup = std::wstring_view(lpCmdLine) == L"--repair-audio";
+	LoadTranslateData();
+	winrt::init_apartment(winrt::apartment_type::single_threaded);
 
 	bool supported = false;
 	try
@@ -67,23 +84,34 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	desktopSource.Content(g_xamlCanvas);
 
 	LoadSettings();
+	if (arguments == L"--pause-audio" || arguments == L"--resume-audio")
+	{
+		g_connectionEnabled = arguments == L"--resume-audio";
+		g_verifyAfterResume = g_connectionEnabled;
+		try { SaveSettings(); }
+		CATCH_LOG();
+	}
 	SetupFlyout();
 	SetupMenu();
 	SetupDevicePicker();
 	SetupSvgIcon();
 
 	g_nid.hWnd = g_niid.hWnd = g_hWnd;
-	wcscpy_s(g_nid.szTip, _(L"AudioPlaybackConnector"));
+	SetConnectionStatus(g_connectionEnabled ? _(L"Looking for the phone") : _(L"Temporarily disabled"));
 	UpdateNotifyIcon();
 
 	WM_TASKBAR_CREATED = RegisterWindowMessageW(L"TaskbarCreated");
 	LOG_LAST_ERROR_IF(WM_TASKBAR_CREATED == 0);
 
+	StartPhonePresenceWatcher();
 	PostMessageW(g_hWnd, WM_CONNECTDEVICE, 0, 0);
+	SetTimer(g_hWnd, AUDIO_HEALTH_TIMER, 2000, nullptr);
 
 	MSG msg;
 	while (GetMessageW(&msg, nullptr, 0, 0))
 	{
+		if (g_settingsWnd && IsDialogMessageW(g_settingsWnd, &msg))
+			continue;
 		BOOL processed = FALSE;
 		winrt::check_hresult(desktopSourceNative2->PreTranslateMessage(&msg, &processed));
 		if (!processed)
@@ -101,23 +129,28 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	switch (message)
 	{
 	case WM_DESTROY:
-		for (const auto& connection : g_audioPlaybackConnections)
-		{
-			connection.second.second.Close();
-			g_devicePicker.SetDisplayStatus(connection.second.first, {}, DevicePickerDisplayStatusOptions::None);
-		}
-		if (g_reconnect)
-		{
-			SaveSettings();
-			g_audioPlaybackConnections.clear();
-		}
-		else
-		{
-			g_audioPlaybackConnections.clear();
-			SaveSettings();
-		}
+		g_stopping = true;
+		DiagnosticLog(L"application stopping");
+		g_audioRepair.Cancel();
+		StopPhonePresenceWatcher();
+		InvalidateAudioActivation();
+		StopAudioNotifications();
+		KillTimer(hWnd, AUDIO_HEALTH_TIMER);
+		try { SaveSettings(); }
+		CATCH_LOG();
+		DisconnectConnections();
+		if (g_settingsWnd)
+			DestroyWindow(g_settingsWnd);
 		Shell_NotifyIconW(NIM_DELETE, &g_nid);
 		PostQuitMessage(0);
+		break;
+	case WM_QUERYENDSESSION:
+		try { SaveSettings(); }
+		CATCH_LOG();
+		return TRUE;
+	case WM_ENDSESSION:
+		if (wParam)
+			DestroyWindow(hWnd);
 		break;
 	case WM_SETTINGCHANGE:
 		if (lParam && CompareStringOrdinal(reinterpret_cast<LPCWCH>(lParam), -1, L"ImmersiveColorSet", -1, TRUE) == CSTR_EQUAL)
@@ -131,6 +164,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case NIN_SELECT:
 		case NIN_KEYSELECT:
 		{
+			if (!g_connectionEnabled)
+			{
+				ShowSettingsWindow();
+				break;
+			}
 			using namespace winrt::Windows::UI::Popups;
 
 			RECT iconRect;
@@ -177,16 +215,52 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 		}
 		break;
+	case WM_SHOWSETTINGS:
+		ShowSettingsWindow();
+		break;
+	case WM_REPAIR_AUDIO:
+		BeginAudioRepair();
+		break;
+	case WM_SET_AUDIO_ENABLED:
+		try { SetPhoneConnectionEnabled(wParam != 0); }
+		CATCH_LOG();
+		break;
 	case WM_CONNECTDEVICE:
-		if (g_reconnect)
+		ConnectRememberedDevice();
+		break;
+	case WM_AUDIO_SESSION_READY:
+		PollAudioHealth();
+		break;
+	case WM_CONNECTIONCHANGED:
+		if (wParam == static_cast<WPARAM>(g_connectionGeneration))
 		{
-			for (const auto& i : g_lastDevices)
-			{
-				ConnectDevice(g_devicePicker, i);
-			}
-			g_lastDevices.clear();
+			DiagnosticLog(L"transport StateChanged event state=" + std::to_wstring(static_cast<int>(lParam) - 1) +
+				L" opening=" + std::to_wstring(g_connecting));
+			CheckClosedConnections();
 		}
 		break;
+	case WM_TIMER:
+		if (wParam == AUDIO_HEALTH_TIMER)
+		{
+			PollAudioHealth();
+			break;
+		}
+		if (wParam == CONNECTION_TIMEOUT_TIMER && g_connecting)
+		{
+			DiagnosticLog(L"connect timeout after 30000ms; cancelling pending operation");
+			CancelTimedOutConnection();
+			break;
+		}
+		if (wParam == RECONNECT_TIMER)
+		{
+			KillTimer(hWnd, RECONNECT_TIMER);
+			ConnectRememberedDevice();
+		}
+		break;
+	case WM_POWERBROADCAST:
+		if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND)
+			PostMessageW(hWnd, WM_CONNECTDEVICE, 0, 0);
+		return TRUE;
 	default:
 		if (WM_TASKBAR_CREATED && message == WM_TASKBAR_CREATED)
 		{
@@ -203,21 +277,15 @@ void SetupFlyout()
 	textBlock.Text(_(L"All connections will be closed.\nExit anyway?"));
 	textBlock.Margin({ 0, 0, 0, 12 });
 
-	static CheckBox checkbox;
-	checkbox.IsChecked(g_reconnect);
-	checkbox.Content(winrt::box_value(_(L"Reconnect on next start")));
-
 	Button button;
 	button.Content(winrt::box_value(_(L"Exit")));
 	button.HorizontalAlignment(HorizontalAlignment::Right);
 	button.Click([](const auto&, const auto&) {
-		g_reconnect = checkbox.IsChecked().Value();
 		PostMessageW(g_hWnd, WM_CLOSE, 0, 0);
 	});
 
 	StackPanel stackPanel;
 	stackPanel.Children().Append(textBlock);
-	stackPanel.Children().Append(checkbox);
 	stackPanel.Children().Append(button);
 
 	Flyout flyout;
@@ -229,6 +297,15 @@ void SetupFlyout()
 
 void SetupMenu()
 {
+	FontIcon appSettingsIcon;
+	appSettingsIcon.Glyph(L"\xE713");
+	MenuFlyoutItem appSettingsItem;
+	appSettingsItem.Text(_(L"Settings"));
+	appSettingsItem.Icon(appSettingsIcon);
+	appSettingsItem.Click([](const auto&, const auto&) {
+		PostMessageW(g_hWnd, WM_SHOWSETTINGS, 0, 0);
+	});
+
 	// https://docs.microsoft.com/en-us/windows/uwp/design/style/segoe-ui-symbol-font
 	FontIcon settingsIcon;
 	settingsIcon.Glyph(L"\xE713");
@@ -271,6 +348,7 @@ void SetupMenu()
 	});
 
 	MenuFlyout menu;
+	menu.Items().Append(appSettingsItem);
 	menu.Items().Append(settingsItem);
 	menu.Items().Append(exitItem);
 	menu.Opened([](const auto& sender, const auto&) {
@@ -289,103 +367,6 @@ void SetupMenu()
 	g_xamlMenu = menu;
 }
 
-winrt::fire_and_forget ConnectDevice(DevicePicker picker, DeviceInformation device)
-{
-	picker.SetDisplayStatus(device, _(L"Connecting"), DevicePickerDisplayStatusOptions::ShowProgress | DevicePickerDisplayStatusOptions::ShowDisconnectButton);
-
-	bool success = false;
-	std::wstring errorMessage;
-
-	try
-	{
-		auto connection = AudioPlaybackConnection::TryCreateFromId(device.Id());
-		if (connection)
-		{
-			g_audioPlaybackConnections.emplace(device.Id(), std::pair(device, connection));
-
-			connection.StateChanged([](const auto& sender, const auto&) {
-				if (sender.State() == AudioPlaybackConnectionState::Closed)
-				{
-					auto it = g_audioPlaybackConnections.find(std::wstring(sender.DeviceId()));
-					if (it != g_audioPlaybackConnections.end())
-					{
-						g_devicePicker.SetDisplayStatus(it->second.first, {}, DevicePickerDisplayStatusOptions::None);
-						g_audioPlaybackConnections.erase(it);
-					}
-					sender.Close();
-				}
-			});
-
-			co_await connection.StartAsync();
-			auto result = co_await connection.OpenAsync();
-
-			switch (result.Status())
-			{
-			case AudioPlaybackConnectionOpenResultStatus::Success:
-				success = true;
-				break;
-			case AudioPlaybackConnectionOpenResultStatus::RequestTimedOut:
-				success = false;
-				errorMessage = _(L"The request timed out");
-				break;
-			case AudioPlaybackConnectionOpenResultStatus::DeniedBySystem:
-				success = false;
-				errorMessage = _(L"The operation was denied by the system");
-				break;
-			case AudioPlaybackConnectionOpenResultStatus::UnknownFailure:
-				success = false;
-				winrt::throw_hresult(result.ExtendedError());
-				break;
-			}
-		}
-		else
-		{
-			success = false;
-			errorMessage = _(L"Unknown error");
-		}
-	}
-	catch (winrt::hresult_error const& ex)
-	{
-		success = false;
-		errorMessage.resize(64);
-		while (1)
-		{
-			auto result = swprintf(errorMessage.data(), errorMessage.size(), L"%s (0x%08X)", ex.message().c_str(), static_cast<uint32_t>(ex.code()));
-			if (result < 0)
-			{
-				errorMessage.resize(errorMessage.size() * 2);
-			}
-			else
-			{
-				errorMessage.resize(result);
-				break;
-			}
-		}
-		LOG_CAUGHT_EXCEPTION();
-	}
-
-	if (success)
-	{
-		picker.SetDisplayStatus(device, _(L"Connected"), DevicePickerDisplayStatusOptions::ShowDisconnectButton);
-	}
-	else
-	{
-		auto it = g_audioPlaybackConnections.find(std::wstring(device.Id()));
-		if (it != g_audioPlaybackConnections.end())
-		{
-			it->second.second.Close();
-			g_audioPlaybackConnections.erase(it);
-		}
-		picker.SetDisplayStatus(device, errorMessage, DevicePickerDisplayStatusOptions::ShowRetryButton);
-	}
-}
-
-winrt::fire_and_forget ConnectDevice(DevicePicker picker, std::wstring_view deviceId)
-{
-	auto device = co_await DeviceInformation::CreateFromIdAsync(deviceId);
-	ConnectDevice(picker, device);
-}
-
 void SetupDevicePicker()
 {
 	g_devicePicker = DevicePicker();
@@ -395,18 +376,21 @@ void SetupDevicePicker()
 	g_devicePicker.DevicePickerDismissed([](const auto&, const auto&) {
 		SetWindowPos(g_hWnd, nullptr, 0, 0, 0, 0, SWP_NOZORDER | SWP_HIDEWINDOW);
 	});
-	g_devicePicker.DeviceSelected([](const auto& sender, const auto& args) {
-		ConnectDevice(sender, args.SelectedDevice());
+	g_devicePicker.DeviceSelected([](const auto&, const auto& args) {
+		if (!g_connectionEnabled)
+			return;
+		const auto device = args.SelectedDevice();
+		const bool newTarget = g_targetDeviceId != device.Id() || g_audioPlaybackConnections.empty();
+		g_targetDeviceId = device.Id();
+		g_targetDeviceName = device.Name();
+		g_retryDelay = 5000;
+		try { SaveSettings(); }
+		CATCH_LOG();
+		ApplyConnectionPreferenceChange(true, newTarget);
 	});
-	g_devicePicker.DisconnectButtonClicked([](const auto& sender, const auto& args) {
-		auto device = args.Device();
-		auto it = g_audioPlaybackConnections.find(std::wstring(device.Id()));
-		if (it != g_audioPlaybackConnections.end())
-		{
-			it->second.second.Close();
-			g_audioPlaybackConnections.erase(it);
-		}
-		sender.SetDisplayStatus(device, {}, DevicePickerDisplayStatusOptions::None);
+	g_devicePicker.DisconnectButtonClicked([](const auto&, const auto&) {
+		try { SetPhoneConnectionEnabled(false); }
+		CATCH_LOG();
 	});
 }
 

@@ -69,3 +69,147 @@ msgstr "未知錯誤"
 #: AudioPlaybackConnector.cpp:362
 msgid "Connected"
 msgstr "已連線"
+
+
+msgid "Settings"
+msgstr "設定"
+
+
+msgid "Start with Windows"
+msgstr "開機啟動"
+
+
+msgid "Start in the system tray after signing in to Windows."
+msgstr "登入 Windows 後自動執行，並顯示系統匣圖示。"
+
+
+msgid "Phone audio connection"
+msgstr "手機音訊連線"
+
+
+msgid "Phone to connect automatically"
+msgstr "自動連線的手機"
+
+
+msgid "Disabling disconnects phone audio. Enabling reconnects the selected phone and retries automatically."
+msgstr "暫時關閉時中斷手機音訊；啟動後自動連線所選手機，失敗時自動重試。"
+
+
+msgid "Enabled"
+msgstr "啟動"
+
+
+msgid "Temporarily disabled"
+msgstr "暫時關閉"
+
+
+msgid "Choose a phone"
+msgstr "請選擇手機"
+
+
+msgid "Looking for the phone"
+msgstr "正在尋找手機"
+
+
+msgid " (currently unavailable)"
+msgstr "（暫時無法使用）"
+
+
+msgid "Will retry automatically: "
+msgstr "連線失敗，將自動重試："
+
+
+msgid "Waiting for the phone; will retry automatically"
+msgstr "等待手機，稍後自動重試"
+
+
+msgid "Choose a phone in Settings"
+msgstr "請在設定中選擇手機"
+
+
+msgid "Could not save settings"
+msgstr "無法儲存設定"
+
+
+msgid "Saved"
+msgstr "已儲存"
+
+
+msgid "Apply"
+msgstr "套用"
+
+
+msgid "Close"
+msgstr "關閉"
+
+
+msgid "Connected; waiting for phone audio"
+msgstr "連線已建立，等待手機播放聲音"
+
+
+msgid "Receiving phone audio"
+msgstr "正在接收手機聲音"
+
+
+msgid "Rebuilding the phone audio connection"
+msgstr "正在重建手機音訊連線"
+
+
+msgid "Enable the phone connection before checking sound"
+msgstr "請先啟動手機音訊連線，再檢測聲音"
+
+
+msgid "Checking phone audio; keep music playing on the phone"
+msgstr "正在檢測，請讓手機持續播放音樂"
+
+
+msgid "No available PC audio output"
+msgstr "電腦沒有可用的聲音輸出裝置"
+
+
+msgid "Phone audio or PC output is muted; check the volume"
+msgstr "手機音訊或電腦輸出已靜音，請檢查音量"
+
+
+msgid "Phone audio is routed to a different output"
+msgstr "手機聲音正在輸出至其他裝置"
+
+
+msgid "Connected; audio signal measurement is unavailable"
+msgstr "連線已建立，目前無法測量手機音訊訊號"
+
+
+msgid "Connected; phone audio session has not appeared"
+msgstr "連線已建立，手機音訊工作階段尚未就緒"
+
+
+msgid "No phone audio detected. Check phone media volume and output, then pause and play again."
+msgstr "未檢測到手機聲音。請檢查手機媒體音量和輸出裝置，再暫停、繼續播放。"
+
+
+msgid "Could not establish the phone audio connection. See the diagnostic log."
+msgstr "手機音訊連線未能建立，請查看診斷記錄。"
+
+
+msgid "Check and repair silent audio"
+msgstr "檢測並修復無聲"
+
+
+msgid "View diagnostic log"
+msgstr "查看診斷記錄"
+
+
+msgid "Preparing phone audio; waiting for the previous connection to close"
+msgstr "正在準備手機音訊，等待舊連線結束"
+
+
+msgid "Checking phone audio after enabling the connection"
+msgstr "正在檢查啟動後的手機音訊"
+
+
+msgid "Connection is ready; no phone sound detected yet. Resume music on the phone if needed."
+msgstr "連線已就緒，尚未檢測到手機聲音；如需播放，請在手機繼續播放音樂。"
+
+
+msgid "Disconnecting may pause the phone player. After reconnecting, resume playback on the phone if needed."
+msgstr "真正關閉可能讓手機播放器暫停。重新連線後，如需播放，請在手機繼續播放。"

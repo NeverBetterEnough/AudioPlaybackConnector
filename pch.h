@@ -24,6 +24,17 @@
 #include <cstdint>
 #include <unordered_map>
 #include <filesystem>
+#include <algorithm>
+#include <vector>
+#include <mutex>
+#include <sstream>
+#include <iomanip>
+#include <memory>
+#include <chrono>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
+#include <audiopolicy.h>
+#include <functiondiscoverykeys_devpkey.h>
 
 // wil
 #ifndef _DEBUG
@@ -41,6 +52,7 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Devices.Enumeration.h>
+#include <winrt/Windows.Devices.Bluetooth.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.Metadata.h>
 #include <winrt/Windows.Media.Audio.h>

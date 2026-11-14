@@ -1,0 +1,20 @@
+#include "resource.h"
+#include <windows.h>
+IDD_SETTINGS DIALOGEX 0, 0, 330, 274
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Settings"
+FONT 9, "Segoe UI"
+BEGIN
+    CONTROL "Start with Windows", IDC_STARTUP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 14, 300, 12
+    LTEXT "Start in the system tray after signing in to Windows.", IDC_STARTUP_DESCRIPTION, 27, 30, 289, 20
+    LTEXT "Phone audio connection", IDC_CONNECTION_LABEL, 14, 57, 140, 12
+    COMBOBOX IDC_CONNECTION_MODE, 166, 54, 150, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Phone to connect automatically", IDC_PHONE_LABEL, 14, 83, 302, 12
+    COMBOBOX IDC_PHONE, 14, 98, 302, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Disabling disconnects phone audio. Enabling reconnects the selected phone and retries automatically.", IDC_SETTINGS_DESCRIPTION, 14, 127, 302, 28
+    LTEXT "", IDC_CONNECTION_STATUS, 14, 161, 302, 47
+    PUSHBUTTON "Check and repair silent audio", IDC_REPAIR_AUDIO, 14, 218, 133, 17
+    PUSHBUTTON "View diagnostic log", IDC_OPEN_LOG, 153, 218, 100, 17
+    DEFPUSHBUTTON "Apply", IDC_APPLY_SETTINGS, 199, 247, 56, 16
+    PUSHBUTTON "Close", IDCANCEL, 260, 247, 56, 16
+END

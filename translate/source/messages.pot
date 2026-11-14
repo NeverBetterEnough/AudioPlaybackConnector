@@ -67,3 +67,147 @@ msgstr ""
 #: AudioPlaybackConnector.cpp:362
 msgid "Connected"
 msgstr ""
+
+
+msgid "Settings"
+msgstr ""
+
+
+msgid "Start with Windows"
+msgstr ""
+
+
+msgid "Start in the system tray after signing in to Windows."
+msgstr ""
+
+
+msgid "Phone audio connection"
+msgstr ""
+
+
+msgid "Phone to connect automatically"
+msgstr ""
+
+
+msgid "Disabling disconnects phone audio. Enabling reconnects the selected phone and retries automatically."
+msgstr ""
+
+
+msgid "Enabled"
+msgstr ""
+
+
+msgid "Temporarily disabled"
+msgstr ""
+
+
+msgid "Choose a phone"
+msgstr ""
+
+
+msgid "Looking for the phone"
+msgstr ""
+
+
+msgid " (currently unavailable)"
+msgstr ""
+
+
+msgid "Will retry automatically: "
+msgstr ""
+
+
+msgid "Waiting for the phone; will retry automatically"
+msgstr ""
+
+
+msgid "Choose a phone in Settings"
+msgstr ""
+
+
+msgid "Could not save settings"
+msgstr ""
+
+
+msgid "Saved"
+msgstr ""
+
+
+msgid "Apply"
+msgstr ""
+
+
+msgid "Close"
+msgstr ""
+
+
+msgid "Connected; waiting for phone audio"
+msgstr ""
+
+
+msgid "Receiving phone audio"
+msgstr ""
+
+
+msgid "Rebuilding the phone audio connection"
+msgstr ""
+
+
+msgid "Enable the phone connection before checking sound"
+msgstr ""
+
+
+msgid "Checking phone audio; keep music playing on the phone"
+msgstr ""
+
+
+msgid "No available PC audio output"
+msgstr ""
+
+
+msgid "Phone audio or PC output is muted; check the volume"
+msgstr ""
+
+
+msgid "Phone audio is routed to a different output"
+msgstr ""
+
+
+msgid "Connected; audio signal measurement is unavailable"
+msgstr ""
+
+
+msgid "Connected; phone audio session has not appeared"
+msgstr ""
+
+
+msgid "No phone audio detected. Check phone media volume and output, then pause and play again."
+msgstr ""
+
+
+msgid "Could not establish the phone audio connection. See the diagnostic log."
+msgstr ""
+
+
+msgid "Check and repair silent audio"
+msgstr ""
+
+
+msgid "View diagnostic log"
+msgstr ""
+
+
+msgid "Preparing phone audio; waiting for the previous connection to close"
+msgstr ""
+
+
+msgid "Checking phone audio after enabling the connection"
+msgstr ""
+
+
+msgid "Connection is ready; no phone sound detected yet. Resume music on the phone if needed."
+msgstr ""
+
+
+msgid "Disconnecting may pause the phone player. After reconnecting, resume playback on the phone if needed."
+msgstr ""

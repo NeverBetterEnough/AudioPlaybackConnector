@@ -231,6 +231,8 @@ winrt::fire_and_forget ConnectDevice(DevicePicker picker, DeviceInformation devi
 	KillTimer(g_hWnd, CONNECTION_TIMEOUT_TIMER);
 	if (success)
 	{
+		if (g_reopenOnArrival) DiagnosticLog(L"phone arrival coalesced into successful in-flight open; no duplicate OpenAsync");
+		g_reopenOnArrival = false;
 		g_receiverLifecycle.Opened();
 		KillTimer(g_hWnd, RECONNECT_TIMER);
 		SetConnectionStatus(_(L"Connected; waiting for phone audio"));

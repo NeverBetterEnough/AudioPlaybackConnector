@@ -343,6 +343,7 @@
     <ClInclude Include="TransportReadiness.hpp" />
     <ClInclude Include="AudioHealthPolicy.hpp" />
     <ClInclude Include="AudioSurvey.hpp" />
+    <ClInclude Include="AudioSurveyWorker.hpp" />
     <ClInclude Include="AudioSessionActivation.hpp" />
     <ClInclude Include="AudioMonitor.hpp" />
     <ClInclude Include="targetver.h" />

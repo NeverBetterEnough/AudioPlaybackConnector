@@ -34,7 +34,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 	g_hInst = hInstance;
 	InitializeDiagnosticLog();
-	DiagnosticLog(L"application starting; diagnostics v6; persistent receiver, arrival watcher, one-time A2DP session activation");
+	DiagnosticLog(L"application starting; diagnostics v7; persistent MTA, verified audio initialization, no Bluetooth teardown for silent startup");
 	g_repairOnStartup = std::wstring_view(lpCmdLine) == L"--repair-audio";
 	LoadTranslateData();
 	winrt::init_apartment(winrt::apartment_type::single_threaded);
@@ -103,6 +103,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	WM_TASKBAR_CREATED = RegisterWindowMessageW(L"TaskbarCreated");
 	LOG_LAST_ERROR_IF(WM_TASKBAR_CREATED == 0);
 
+	StartAudioWorker();
 	StartPhonePresenceWatcher();
 	PostMessageW(g_hWnd, WM_CONNECTDEVICE, 0, 0);
 	SetTimer(g_hWnd, AUDIO_HEALTH_TIMER, 2000, nullptr);
@@ -134,7 +135,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		g_audioRepair.Cancel();
 		StopPhonePresenceWatcher();
 		InvalidateAudioActivation();
-		StopAudioNotifications();
+		StopAudioWorker();
 		KillTimer(hWnd, AUDIO_HEALTH_TIMER);
 		try { SaveSettings(); }
 		CATCH_LOG();
@@ -229,7 +230,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		ConnectRememberedDevice();
 		break;
 	case WM_AUDIO_SESSION_READY:
+		if (wParam && g_connectionEnabled)
+			DiagnosticLog(L"audio native notification reason=" + std::to_wstring(wParam) + L" state=" + std::to_wstring(lParam));
 		PollAudioHealth();
+		break;
+	case WM_AUDIO_SURVEY_RESULT:
+		ReceiveAudioSurvey();
 		break;
 	case WM_CONNECTIONCHANGED:
 		if (wParam == static_cast<WPARAM>(g_connectionGeneration))
@@ -240,6 +246,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		}
 		break;
 	case WM_TIMER:
+		if (wParam == AUDIO_INITIALIZATION_TIMER)
+		{
+			KillTimer(hWnd, AUDIO_INITIALIZATION_TIMER);
+			PollAudioHealth();
+			break;
+		}
 		if (wParam == AUDIO_HEALTH_TIMER)
 		{
 			PollAudioHealth();

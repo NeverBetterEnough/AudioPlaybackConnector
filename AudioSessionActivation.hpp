@@ -3,12 +3,35 @@
 #include <atomic>
 #include <unordered_set>
 
-// A new context belongs to one Opened transport. Native callbacks and duplicate
-// health polls may observe the same session, but must only initialize it once.
+// An API acknowledgement is not evidence of audio delivery. Remain pending
+// through an idle phone and early successful pulses, until real audio arrives.
+class SessionInitialization
+{
+public:
+	bool verified = false;
+	unsigned attempts = 0;
+	unsigned failures = 0;
+	uint64_t nextAttemptAt = 0;
+	bool Observe(bool meterValid, float peak)
+	{
+		if (!meterValid || peak <= 0.0001f || verified) return false;
+		verified = true;
+		return true;
+	}
+	bool Due(uint64_t now) const { return !verified && failures < 3 && now >= nextAttemptAt; }
+	void Attempted(uint64_t now, HRESULT result)
+	{
+		++attempts;
+		failures = FAILED(result) ? failures + 1 : 0;
+		nextAttemptAt = now + (FAILED(result) ? 2000 : (attempts < 3 ? 250 : 1000));
+	}
+};
+
 struct AudioActivationContext
 {
 	std::atomic<bool> current{ true };
-	std::unordered_set<std::wstring> initializedSessions; // MTA survey worker only
+	uint64_t epoch = 0;
+	std::unordered_map<std::wstring, SessionInitialization> sessions; // persistent MTA worker only
 };
 
 constexpr GUID AUDIO_ACTIVATION_EVENT{ 0x638bf60a, 0x7df2, 0x49a4, {0x9d, 0xb1, 0x8d, 0xb4, 0xb0, 0x57, 0x12, 0x81} };
@@ -43,26 +66,52 @@ HRESULT ActivateUnmutedPhoneSession(Volume* volume, Settle settle)
 
 // Notifications only enqueue work. Core Audio forbids blocking or registering
 // other callbacks from inside its notification callbacks.
+struct AudioSessionInbox
+{
+	std::mutex mutex;
+	std::vector<winrt::com_ptr<IAudioSessionControl>> created;
+};
+
 struct AudioSessionReadyEvents : winrt::implements<AudioSessionReadyEvents, IAudioSessionNotification, IAudioSessionEvents>
 {
-	explicit AudioSessionReadyEvents(HWND window) : window_(window) { }
-	HRESULT __stdcall OnSessionCreated(IAudioSessionControl*) noexcept override { Notify(); return S_OK; }
-	HRESULT __stdcall OnStateChanged(AudioSessionState) noexcept override { Notify(); return S_OK; }
-	HRESULT __stdcall OnSessionDisconnected(AudioSessionDisconnectReason) noexcept override { Notify(); return S_OK; }
+	AudioSessionReadyEvents(HWND window, std::shared_ptr<AudioSessionInbox> inbox) : window_(window), inbox_(std::move(inbox)) { }
+	HRESULT __stdcall OnSessionCreated(IAudioSessionControl* session) noexcept override
+	{
+		if (!session) return S_OK;
+		try
+		{
+			winrt::com_ptr<IAudioSessionControl> reference;
+			reference.copy_from(session);
+			std::lock_guard<std::mutex> guard(inbox_->mutex);
+			// Keep the callback's reference: enumeration can lag session creation.
+			if (inbox_->created.size() >= 64) inbox_->created.erase(inbox_->created.begin());
+			inbox_->created.push_back(std::move(reference));
+		}
+		catch (...) { }
+		Notify(1, 0); return S_OK;
+	}
+	HRESULT __stdcall OnStateChanged(AudioSessionState state) noexcept override { Notify(2, state); return S_OK; }
+	HRESULT __stdcall OnSessionDisconnected(AudioSessionDisconnectReason reason) noexcept override { Notify(3, reason); return S_OK; }
 	HRESULT __stdcall OnDisplayNameChanged(LPCWSTR, LPCGUID) noexcept override { return S_OK; }
 	HRESULT __stdcall OnIconPathChanged(LPCWSTR, LPCGUID) noexcept override { return S_OK; }
-	HRESULT __stdcall OnSimpleVolumeChanged(float, BOOL, LPCGUID) noexcept override { return S_OK; }
+	HRESULT __stdcall OnSimpleVolumeChanged(float, BOOL, LPCGUID context) noexcept override
+	{
+		if (!context || *context != AUDIO_ACTIVATION_EVENT) Notify(4, 0);
+		return S_OK;
+	}
 	HRESULT __stdcall OnChannelVolumeChanged(DWORD, float[], DWORD, LPCGUID) noexcept override { return S_OK; }
 	HRESULT __stdcall OnGroupingParamChanged(LPCGUID, LPCGUID) noexcept override { return S_OK; }
 private:
-	void Notify() const { PostMessageW(window_, WM_AUDIO_SESSION_READY, 0, 0); }
+	void Notify(WPARAM reason, LPARAM state) const { PostMessageW(window_, WM_AUDIO_SESSION_READY, reason, state); }
 	HWND window_;
+	std::shared_ptr<AudioSessionInbox> inbox_;
 };
 
 class PhoneAudioNotifications
 {
 public:
-	PhoneAudioNotifications(IAudioSessionManager2* manager, HWND window) : events_(winrt::make_self<AudioSessionReadyEvents>(window))
+	PhoneAudioNotifications(IAudioSessionManager2* manager, HWND window) :
+		inbox_(std::make_shared<AudioSessionInbox>()), events_(winrt::make_self<AudioSessionReadyEvents>(window, inbox_))
 	{
 		manager_.copy_from(manager);
 		winrt::check_hresult(manager_->RegisterSessionNotification(events_.get()));
@@ -92,8 +141,19 @@ public:
 			else ++it;
 		}
 	}
+	std::vector<winrt::com_ptr<IAudioSessionControl>> KnownSessions()
+	{
+		std::vector<winrt::com_ptr<IAudioSessionControl>> result;
+		{
+			std::lock_guard<std::mutex> guard(inbox_->mutex);
+			result.swap(inbox_->created);
+		}
+		for (const auto& session : sessions_) result.push_back(session.second);
+		return result;
+	}
 private:
 	winrt::com_ptr<IAudioSessionManager2> manager_;
+	std::shared_ptr<AudioSessionInbox> inbox_;
 	winrt::com_ptr<AudioSessionReadyEvents> events_;
 	std::unordered_map<std::wstring, winrt::com_ptr<IAudioSessionControl>> sessions_;
 };
@@ -127,4 +187,10 @@ void ObservePhoneSession(IAudioSessionManager2* manager, IAudioSessionControl* s
 		if (session) g_audioNotifications->Observe(instance, session);
 	}
 	catch (const winrt::hresult_error& error) { DiagnosticLog(L"audio session notifications unavailable; timer fallback hresult=" + HResultText(error.code())); }
+}
+
+std::vector<winrt::com_ptr<IAudioSessionControl>> NotifiedPhoneSessions()
+{
+	std::lock_guard<std::mutex> guard(g_audioNotificationsMutex);
+	return g_audioNotifications ? g_audioNotifications->KnownSessions() : std::vector<winrt::com_ptr<IAudioSessionControl>>{};
 }

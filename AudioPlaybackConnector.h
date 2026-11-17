@@ -20,9 +20,11 @@ constexpr UINT WM_CONNECTIONCHANGED = WM_APP + 4;
 constexpr UINT WM_REPAIR_AUDIO = WM_APP + 5;
 constexpr UINT WM_SET_AUDIO_ENABLED = WM_APP + 6;
 constexpr UINT WM_AUDIO_SESSION_READY = WM_APP + 7;
+constexpr UINT WM_AUDIO_SURVEY_RESULT = WM_APP + 8;
 constexpr UINT_PTR RECONNECT_TIMER = 1;
 constexpr UINT_PTR AUDIO_HEALTH_TIMER = 2;
 constexpr UINT_PTR CONNECTION_TIMEOUT_TIMER = 3;
+constexpr UINT_PTR AUDIO_INITIALIZATION_TIMER = 4;
 
 HINSTANCE g_hInst;
 HWND g_hWnd;
@@ -79,6 +81,7 @@ void InvalidateAudioActivation();
 #include "TransportReadiness.hpp"
 #include "AudioSessionActivation.hpp"
 #include "AudioSurvey.hpp"
+#include "AudioSurveyWorker.hpp"
 #include "I18n.hpp"
 #include "SettingsUtil.hpp"
 #include "Direct2DSvg.hpp"

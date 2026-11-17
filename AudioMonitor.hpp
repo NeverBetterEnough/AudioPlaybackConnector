@@ -11,22 +11,37 @@ std::wstring g_lastDefaultOutput;
 bool g_audioRepairNeedsAttention = false;
 bool g_resumeSignalPending = false;
 std::shared_ptr<AudioActivationContext> g_audioActivation;
+uint64_t g_audioActivationEpoch = 0;
+std::unique_ptr<AudioSurveyWorker> g_audioWorker;
+
+void StartAudioWorker()
+{
+	g_audioWorker = std::make_unique<AudioSurveyWorker>(g_hWnd);
+}
+
+void StopAudioWorker()
+{
+	if (g_audioWorker) g_audioWorker->Stop();
+	g_audioWorker.reset();
+}
 
 void InvalidateAudioActivation()
 {
 	if (g_audioActivation) g_audioActivation->current = false;
 	g_audioActivation.reset();
+	KillTimer(g_hWnd, AUDIO_INITIALIZATION_TIMER);
 }
 
 void OnAudioConnectionOpened()
 {
 	InvalidateAudioActivation();
 	g_audioActivation = std::make_shared<AudioActivationContext>();
+	g_audioActivation->epoch = ++g_audioActivationEpoch;
 	g_audioOpenedAt = GetTickCount64();
 	g_audioRepairNeedsAttention = false;
 	g_lastDefaultOutput.clear();
 	g_audioRepair.OnConnected(g_audioOpenedAt);
-	DiagnosticLog(L"connection open; audio signal has not yet been verified");
+	DiagnosticLog(L"connection open; audio initialization pending until real signal; epoch=" + std::to_wstring(g_audioActivation->epoch));
 	PostMessageW(g_hWnd, WM_AUDIO_SESSION_READY, 0, 0);
 	if (g_repairOnStartup)
 	{
@@ -37,7 +52,7 @@ void OnAudioConnectionOpened()
 	{
 		g_verifyAfterResume = false;
 		g_resumeSignalPending = true;
-		DiagnosticLog(L"resume transport ready; passive signal monitoring only; no silence timer or automatic repair");
+		DiagnosticLog(L"resume transport ready; initialization pending until real signal; no automatic Bluetooth teardown");
 	}
 }
 
@@ -59,6 +74,7 @@ void BeginAudioRepair()
 	g_audioRepair.Request(GetTickCount64());
 	InvalidateAudioActivation();
 	g_audioActivation = std::make_shared<AudioActivationContext>();
+	g_audioActivation->epoch = ++g_audioActivationEpoch;
 	PostMessageW(g_hWnd, WM_AUDIO_SESSION_READY, 0, 0);
 	g_audioRepairNeedsAttention = false;
 	DiagnosticLog(L"repair requested by user; one reconnect permitted; deadline_ms=90000");
@@ -84,13 +100,16 @@ std::wstring AudioHealthMessage(AudioHealthKind kind)
 void ApplyAudioSurvey(AudioSurvey survey)
 {
 	const auto now = GetTickCount64();
+	KillTimer(g_hWnd, AUDIO_INITIALIZATION_TIMER);
+	if (survey.nextInitializationMs && g_audioActivation && g_audioActivation->current)
+		SetTimer(g_hWnd, AUDIO_INITIALIZATION_TIMER, (std::max)(survey.nextInitializationMs, UINT(50)), nullptr);
 	survey.facts.connected = g_receiverLifecycle.TransportReady() && !g_connecting;
 	const auto kind = FAILED(survey.error) && !survey.facts.outputAvailable && survey.error != HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ?
 		AudioHealthKind::Unmeasurable : ClassifyAudioHealth(survey.facts);
 	if (kind == AudioHealthKind::Signal && g_resumeSignalPending)
 	{
 		g_resumeSignalPending = false;
-		DiagnosticLog(L"resume verification passed; phone signal confirmed; no automatic repair");
+		DiagnosticLog(L"resume verification passed; phone signal confirmed; no Bluetooth teardown");
 	}
 	// Do not reset backoff for an OpenAsync success that immediately closes.
 	if (kind == AudioHealthKind::Signal || now - g_audioOpenedAt >= 30000)
@@ -143,64 +162,37 @@ void ApplyAudioSurvey(AudioSurvey survey)
 	}
 }
 
-winrt::fire_and_forget PollAudioHealth()
+void PollAudioHealth()
 {
 	if (g_stopping || !g_connectionEnabled || g_connecting || !g_receiverLifecycle.TransportReady())
 	{
 		if (g_audioRepair.Observe(AudioHealthKind::Disconnected, GetTickCount64()) == AudioRepairDecision::NeedsUserAction)
 			SetConnectionStatus(_(L"Could not establish the phone audio connection. See the diagnostic log."));
-		co_return;
+		return;
 	}
 	if (g_audioSamplePending)
 	{
 		g_audioResampleRequested = true;
-		co_return;
+		return;
 	}
 	g_audioSamplePending = true;
-	const auto serial = ++g_audioSampleSerial;
-	const auto generation = g_connectionGeneration;
-	const auto openedAt = g_audioOpenedAt;
-	const auto phoneName = g_targetDeviceName;
-	const auto activation = g_audioActivation;
-	const auto context = ApartmentReturn{};
-	bool failed = false;
-	try
+	if (!g_audioWorker) { g_audioSamplePending = false; return; }
+	g_audioWorker->Request({ ++g_audioSampleSerial, g_connectionGeneration, g_targetDeviceName, g_audioActivation });
+}
+
+void ReceiveAudioSurvey()
+{
+	if (!g_audioWorker) return;
+	auto result = g_audioWorker->TakeResult();
+	if (!result) return;
+	if (result->job.serial == g_audioSampleSerial) g_audioSamplePending = false;
+	if (IsCurrentConnectionAttempt(result->job.generation) && result->job.activation == g_audioActivation &&
+		!g_connecting && g_receiverLifecycle.TransportReady())
+		ApplyAudioSurvey(std::move(result->survey));
+	else if (!g_stopping && g_receiverLifecycle.TransportReady()) g_audioResampleRequested = true;
+	if (g_audioResampleRequested)
 	{
-		co_await winrt::resume_background();
-		const auto initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-		AudioSurvey survey;
-		if (SUCCEEDED(initialized))
-		{
-			try { survey = SurveyPhoneAudio(phoneName, activation); }
-			catch (...) { survey.error = E_FAIL; }
-			CoUninitialize();
-		}
-		else survey.error = initialized;
-		co_await context;
-		if (serial == g_audioSampleSerial) g_audioSamplePending = false;
-		if (IsCurrentConnectionAttempt(generation) && openedAt == g_audioOpenedAt && !g_connecting && g_receiverLifecycle.TransportReady())
-			ApplyAudioSurvey(std::move(survey));
-		else if (!g_stopping && g_receiverLifecycle.TransportReady())
-			PostMessageW(g_hWnd, WM_AUDIO_SESSION_READY, 0, 0);
-		if (g_audioResampleRequested)
-		{
-			g_audioResampleRequested = false;
-			PostMessageW(g_hWnd, WM_AUDIO_SESSION_READY, 0, 0);
-		}
-	}
-	catch (...)
-	{
-		DiagnosticLog(L"audio survey worker failed or UI apartment closed");
-		failed = true;
-	}
-	if (failed)
-	{
-		// Recover UI-owned flags only after returning to its apartment.
-		try
-		{
-			co_await context;
-			if (serial == g_audioSampleSerial) g_audioSamplePending = false;
-		}
-		catch (...) { }
+		g_audioResampleRequested = false;
+		PostMessageW(g_hWnd, WM_AUDIO_SESSION_READY, 0, 0);
 	}
 }

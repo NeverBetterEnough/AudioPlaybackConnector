@@ -153,6 +153,69 @@ void TestSessionActivation()
 	std::puts("PASS: session activation without transport operations; user mute and zero volume preserved; failure and interruption restore original state");
 }
 
+void TestVerifiedInitialization()
+{
+	SessionInitialization initialization;
+	Require(initialization.Due(1000), "A new audio session must initialize promptly");
+	initialization.Attempted(1000, S_OK);
+	Require(!initialization.verified && !initialization.Due(1100), "S_OK without audio must remain unverified and rate limited");
+	Require(initialization.Due(1250), "An early successful activation must be retried when it produces no audio");
+	initialization.Attempted(1250, S_OK);
+	Require(!initialization.Observe(false, 1.0f) && !initialization.verified, "Invalid meter values cannot verify playback");
+	Require(initialization.Due(1200000), "Starting phone playback many minutes after reconnect must still have pending initialization");
+	initialization.Attempted(1200000, S_OK);
+	Require(!initialization.verified && !initialization.Due(1200999) && initialization.Due(1201000),
+		"Idle retries must be rate limited without declaring success or exhausting on silence");
+	Require(initialization.Observe(true, 0.2f) && initialization.verified, "Only real phone signal must complete initialization");
+	Require(!initialization.Due(2000000) && !initialization.Observe(true, 0.2f), "Verified playback must stop all activation pulses and duplicate completions");
+	Require(!initialization.Observe(true, 0) && !initialization.Due(3000000), "A quiet passage in verified playback must not restart initialization");
+	SessionInitialization failed;
+	for (uint64_t now = 0; now < 6000; now += 2000) failed.Attempted(now, E_ACCESSDENIED);
+	Require(!failed.Due(90000), "Persistent API errors must stop instead of changing mute indefinitely");
+	std::puts("PASS: early S_OK remains pending, delayed playback, rate limiting, invalid meters, real-signal verification, no pulses after success, API failure bound");
+}
+
+void TestPersistentAudioWorker()
+{
+	std::vector<DWORD> threads;
+	std::vector<APTTYPE> apartments;
+	AudioSurveyWorker worker(nullptr, [&](const std::wstring&, std::shared_ptr<AudioActivationContext>) {
+		APTTYPE type = APTTYPE_CURRENT;
+		APTTYPEQUALIFIER qualifier{};
+		AudioSurvey survey;
+		survey.error = CoGetApartmentType(&type, &qualifier);
+		threads.push_back(GetCurrentThreadId());
+		apartments.push_back(type);
+		return survey;
+	});
+	auto context = std::make_shared<AudioActivationContext>();
+	auto awaitResult = [&]() {
+		const auto deadline = GetTickCount64() + 2000;
+		for (;;)
+		{
+			if (auto result = worker.TakeResult()) return result;
+			Require(GetTickCount64() < deadline, "The persistent audio worker must not hang");
+			Sleep(1);
+		}
+	};
+	worker.Request({ 1, 3, L"test", context });
+	auto first = awaitResult();
+	Require(SUCCEEDED(first->survey.error) && first->job.serial == 1, "Audio worker must publish the matching result");
+	Sleep(30);
+	worker.Request({ 2, 3, L"test", context });
+	auto second = awaitResult();
+	Require(SUCCEEDED(second->survey.error) && second->job.serial == 2 && threads.size() == 2 && threads[0] == threads[1],
+		"Both surveys must use one continuously owned native thread");
+	Require(apartments[0] == APTTYPE_MTA && apartments[1] == APTTYPE_MTA, "Core Audio must retain a live MTA between surveys");
+	context->current = false;
+	worker.Request({ 3, 3, L"test", context });
+	auto canceled = awaitResult();
+	Require(canceled->survey.error == E_ABORT && threads.size() == 2, "An obsolete connection must not execute queued audio mutations");
+	worker.Stop();
+	worker.Stop();
+	std::puts("PASS: persistent MTA and thread identity across surveys, result identity, canceled job suppression, safe repeated shutdown");
+}
+
 void TestTransportReadiness()
 {
 	auto signal = std::make_shared<ConnectionStateSignal>();
@@ -201,6 +264,8 @@ int wmain()
 		TestTransportReadiness();
 		TestReceiverLifetime();
 		TestSessionActivation();
+		TestVerifiedInitialization();
+		TestPersistentAudioWorker();
 		Require(!fs::exists(path), "Tests require a clean, dedicated output directory");
 		LoadSettings();
 		Require(g_connectionEnabled && g_targetDeviceId.empty(), "Missing configuration must use defaults");
